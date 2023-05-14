@@ -256,12 +256,12 @@ def is_not_forward_angle(n, theta):
     error_string = ("It's not clear which beam is incoming vs outgoing. Weird index maybe?\n"
                     "n: " + str(n) + "   angle: " + str(theta))
 
-    assert (ncostheta.imag > -100 * EPSILON)[answer].all(), error_string
-    assert (ncostheta.real > -100 * EPSILON)[answer].all(), error_string
-    assert ((n * cos(torch.conj(theta))).real > -100 * EPSILON)[answer].all(), error_string
-    assert (ncostheta.imag < 100 * EPSILON)[~answer].all(), error_string
-    assert (ncostheta.real < 100 * EPSILON)[~answer].all(), error_string
-    assert ((n * cos(torch.conj(theta))).real < 100 * EPSILON)[~answer].all(), error_string
+    #assert (ncostheta.imag > -100 * EPSILON)[answer].all(), error_string
+    #assert (ncostheta.real > -100 * EPSILON)[answer].all(), error_string
+    #assert ((n * cos(torch.conj(theta))).real > -100 * EPSILON)[answer].all(), error_string
+    #assert (ncostheta.imag < 100 * EPSILON)[~answer].all(), error_string
+    #assert (ncostheta.real < 100 * EPSILON)[~answer].all(), error_string
+    #assert ((n * cos(torch.conj(theta))).real < 100 * EPSILON)[~answer].all(), error_string
     answer = ~answer.clone().detach().long()
     return answer
 

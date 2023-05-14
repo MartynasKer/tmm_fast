@@ -57,8 +57,6 @@ def plot_stacks(ax, indexes, thickness, labels=None, show_material=True):
 #     indexes = indexes.real[::-1]
         minmax = colors.Normalize(vmin=min(indexes[0])-1, vmax=max(indexes[0])+1)
     cmap = cm.ScalarMappable(norm= minmax, cmap=cm.rainbow)
-    if labels is None: # if no labels are provided, numerate the stacks
-        labels = str(np.arange(len(thickness)))
     if type(thickness) is list:
         max_stack_height = np.max([np.sum(k)*1e6 for k in thickness])
         for j, thick in enumerate(thickness):
