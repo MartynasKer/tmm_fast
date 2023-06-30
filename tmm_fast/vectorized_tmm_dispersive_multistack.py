@@ -5,15 +5,19 @@ import torch
 
 from typing import Union
 import sys
-EPSILON = sys.float_info.epsilon
 
-def coh_vec_tmm_disp_mstack(pol:str,
-                            N:Union[np.ndarray, torch.Tensor], 
-                            T:Union[np.ndarray, torch.Tensor], 
-                            Theta:Union[np.ndarray, torch.Tensor], 
-                            lambda_vacuum:Union[np.ndarray, torch.Tensor], 
-                            device:str='cpu', 
-                            timer:bool=False) -> dict:
+EPSILON = 5e-7
+
+
+def coh_vec_tmm_disp_mstack(
+    pol: str,
+    N: Union[np.ndarray, torch.Tensor],
+    T: Union[np.ndarray, torch.Tensor],
+    Theta: Union[np.ndarray, torch.Tensor],
+    lambda_vacuum: Union[np.ndarray, torch.Tensor],
+    device: str = "cpu",
+    timer: bool = False,
+) -> dict:
     """
     Parallelized computation of reflection and transmission for coherent light spectra that traverse
     a bunch of multilayer thin-films with dispersive materials.
@@ -100,6 +104,7 @@ def coh_vec_tmm_disp_mstack(pol:str,
 
     if timer:
         import time
+
         starttime = time.time()
     datatype = check_datatype(N, T, lambda_vacuum, Theta)
     # check uniform data types (e.g. only np.array or torch.tensor) -> save this type
@@ -115,7 +120,12 @@ def coh_vec_tmm_disp_mstack(pol:str,
     if T.ndim < 2:
         squeezed_T = True
         T = T.unsqueeze(0)
-    assert squeezed_N == squeezed_T, 'N and T are not of same shape, as they are of dimensions ' + str(N.ndim) + ' and ' + str(T.ndim)
+    assert squeezed_N == squeezed_T, (
+        "N and T are not of same shape, as they are of dimensions "
+        + str(N.ndim)
+        + " and "
+        + str(T.ndim)
+    )
     if timer:
         push_time = time.time() - starttime
     num_layers = T.shape[1]
@@ -126,60 +136,95 @@ def coh_vec_tmm_disp_mstack(pol:str,
 
     # if a constant refractive index is used (no dispersion) extend the tensor
     if N.ndim == 2:
-       N = torch.tile(N, (num_wavelengths, 1)).T
+        N = torch.tile(N, (num_wavelengths, 1)).T
 
     # SnellThetas is a tensor, for each stack and layer, the angle that the light travels
     # through the layer. Computed with Snell's law. Note that the "angles" may be complex!
     SnellThetas = SnellLaw_vectorized(N, Theta)
 
-    theta = 2 * np.pi * torch.einsum('skij,sij->skij', cos(SnellThetas), N)  # [theta,d, lambda]
-    kz_list = torch.einsum('sijk,k->skij', theta, 1 / lambda_vacuum)  # [lambda, theta, d]
+    theta = (
+        2 * np.pi * torch.einsum("skij,sij->skij", cos(SnellThetas), N)
+    )  # [theta,d, lambda]
+    kz_list = torch.einsum(
+        "sijk,k->skij", theta, 1 / lambda_vacuum
+    )  # [lambda, theta, d]
 
     # kz is the z-component of (complex) angular wavevector for forward-moving
     # wave. Positive imaginary part means decaying.
 
     # delta is the total phase accrued by traveling through a given layer.
     # Ignore warning about inf multiplication
-    olderr = seterr(invalid='ignore')
-    delta = torch.einsum('skij,sj->skij', kz_list, T)
+    olderr = seterr(invalid="ignore")
+    delta = torch.einsum("skij,sj->skij", kz_list, T)
     seterr(**olderr)
 
     # t_list and r_list hold the transmission and reflection coefficients from
     # the Fresnel Equations
 
-    t_list = interface_t_vec(pol, N[:, :-1, :], N[:, 1:, :], SnellThetas[:, :, :-1, :], SnellThetas[:, :, 1:, :])
-    r_list = interface_r_vec(pol, N[:, :-1, :], N[:, 1:, :], SnellThetas[:, :, :-1, :], SnellThetas[:, :, 1:, :])
-    
+    t_list = interface_t_vec(
+        pol,
+        N[:, :-1, :],
+        N[:, 1:, :],
+        SnellThetas[:, :, :-1, :],
+        SnellThetas[:, :, 1:, :],
+    )
+    r_list = interface_r_vec(
+        pol,
+        N[:, :-1, :],
+        N[:, 1:, :],
+        SnellThetas[:, :, :-1, :],
+        SnellThetas[:, :, 1:, :],
+    )
+
     # A ist the propagation term for matrix optic and holds the appropriate accumulated phase for the thickness
     # of each layer
     A = exp(1j * delta[:, :, :, 1:-1])
     F = r_list[:, :, :, 1:]
-    
 
     # M_list holds the transmission and reflection matrices from matrix-optics
     # alex:
-    M_list = torch.zeros((num_stacks, num_angles, num_wavelengths, num_layers, 2, 2), dtype=torch.cfloat, device=device)
-    M_list[:, :, :, 1:-1, 0, 0] = torch.einsum('shji,sjhi->sjhi', 1 / A, 1 / t_list[:, :, :, 1:])
-    M_list[:, :, :, 1:-1, 0, 1] = torch.einsum('shji,sjhi->sjhi', 1 / A, F / t_list[:, :, :, 1:])
-    M_list[:, :, :, 1:-1, 1, 0] = torch.einsum('shji,sjhi->sjhi', A, F / t_list[:, :, :, 1:])
-    M_list[:, :, :, 1:-1, 1, 1] = torch.einsum('shji,sjhi->sjhi', A, 1 / t_list[:, :, :, 1:])
-    Mtilde = torch.empty((num_stacks, num_angles, num_wavelengths, 2, 2), dtype=torch.cfloat, device=device)
+    M_list = torch.zeros(
+        (num_stacks, num_angles, num_wavelengths, num_layers, 2, 2),
+        dtype=torch.cfloat,
+        device=device,
+    )
+    M_list[:, :, :, 1:-1, 0, 0] = torch.einsum(
+        "shji,sjhi->sjhi", 1 / A, 1 / t_list[:, :, :, 1:]
+    )
+    M_list[:, :, :, 1:-1, 0, 1] = torch.einsum(
+        "shji,sjhi->sjhi", 1 / A, F / t_list[:, :, :, 1:]
+    )
+    M_list[:, :, :, 1:-1, 1, 0] = torch.einsum(
+        "shji,sjhi->sjhi", A, F / t_list[:, :, :, 1:]
+    )
+    M_list[:, :, :, 1:-1, 1, 1] = torch.einsum(
+        "shji,sjhi->sjhi", A, 1 / t_list[:, :, :, 1:]
+    )
+    Mtilde = torch.empty(
+        (num_stacks, num_angles, num_wavelengths, 2, 2),
+        dtype=torch.cfloat,
+        device=device,
+    )
     Mtilde[:, :, :] = make_2x2_tensor(1, 0, 0, 1, dtype=torch.cfloat)
 
     # contract the M_list matrix along the dimension of the layers, all
     for i in range(1, num_layers - 1):
-        Mtilde = torch.einsum('sijkl,sijlm->sijkm', Mtilde, M_list[:, :, :, i])
+        Mtilde = torch.einsum("sijkl,sijlm->sijkm", Mtilde, M_list[:, :, :, i])
 
     # M_r0 accounts for the first and last stack where the translation coefficients are 1
     # todo: why compute separately?
-    M_r0 = torch.empty((num_stacks, num_angles, num_wavelengths, 2, 2), dtype=torch.cfloat, device=device)
+    M_r0 = torch.empty(
+        (num_stacks, num_angles, num_wavelengths, 2, 2),
+        dtype=torch.cfloat,
+        device=device,
+    )
     M_r0[:, :, :, 0, 0] = 1
     M_r0[:, :, :, 0, 1] = r_list[:, :, :, 0]
     M_r0[:, :, :, 1, 0] = r_list[:, :, :, 0]
     M_r0[:, :, :, 1, 1] = 1
-    M_r0 = torch.einsum('sijkl,sij->sijkl', M_r0, 1 / t_list[:, :, :, 0])
+    M_r0 = torch.einsum("sijkl,sij->sijkl", M_r0, 1 / t_list[:, :, :, 0])
 
-    Mtilde = torch.einsum('shijk,shikl->shijl', M_r0, Mtilde)
+    Mtilde = torch.einsum("shijk,shikl->shijl", M_r0, Mtilde)
 
     # Net complex transmission and reflection amplitudes
     r = Mtilde[:, :, :, 1, 0] / Mtilde[:, :, :, 0, 0]
@@ -188,7 +233,9 @@ def coh_vec_tmm_disp_mstack(pol:str,
     # Net transmitted and reflected power, as a proportion of the incoming light
     # power.
     R = R_from_r(r)
-    T = T_from_t_vec(pol, t, N[:, 0], N[:, -1], SnellThetas[:, :, 0], SnellThetas[:, :, -1])
+    T = T_from_t_vec(
+        pol, t, N[:, 0], N[:, -1], SnellThetas[:, :, 0], SnellThetas[:, :, -1]
+    )
 
     if squeezed_T and r.shape[0] == 1:
         r = torch.reshape(r, (r.shape[1], r.shape[2]))
@@ -204,9 +251,10 @@ def coh_vec_tmm_disp_mstack(pol:str,
 
     if timer:
         total_time = time.time() - starttime
-        return {'r': r, 't': t, 'R': R, 'T': T}, [push_time, total_time]
+        return {"r": r, "t": t, "R": R, "T": T}, [push_time, total_time]
     else:
-        return {'r': r, 't': t, 'R': R, 'T': T}
+        return {"r": r, "t": t, "R": R, "T": T}
+
 
 def SnellLaw_vectorized(n, th):
     """
@@ -220,17 +268,29 @@ def SnellLaw_vectorized(n, th):
     sin_th = torch.unsqueeze(torch.sin(th), dim=0)
     n0 = torch.unsqueeze(n[:, 0], dim=-1)
     n0th = torch.matmul(n0, sin_th)
-    assert n0th.shape == (n.shape[0], n.shape[-1], th.shape[0]), (n.shape[-1], th.shape[0])
-    angles = asin(torch.einsum('sij,ski->sjki', n0th, 1/n))
-    assert angles.shape == (n.shape[0], th.shape[0], n.shape[1], n.shape[2]), (th.shape[0], n.shape[0], n.shape[1])
+    assert n0th.shape == (n.shape[0], n.shape[-1], th.shape[0]), (
+        n.shape[-1],
+        th.shape[0],
+    )
+    angles = asin(torch.einsum("sij,ski->sjki", n0th, 1 / n))
+    assert angles.shape == (n.shape[0], th.shape[0], n.shape[1], n.shape[2]), (
+        th.shape[0],
+        n.shape[0],
+        n.shape[1],
+    )
 
     # dim(angles) = [dim_theta, dim_d, dim_lambda]
     # The first and last entry need to be the forward angle (the intermediate
     # layers don't matter, see https://arxiv.org/abs/1603.02720 Section 5)
 
-    angles[:, :, 0] = -is_not_forward_angle(n[:, 0], angles[:, :,  0]) * pi + angles[:, :, 0]
-    angles[:, :, -1] = -is_not_forward_angle(n[:, -1], angles[:, :, -1]) * pi + angles[:, :, -1]
+    angles[:, :, 0] = (
+        -is_not_forward_angle(n[:, 0], angles[:, :, 0]) * pi + angles[:, :, 0]
+    )
+    angles[:, :, -1] = (
+        -is_not_forward_angle(n[:, -1], angles[:, :, -1]) * pi + angles[:, :, -1]
+    )
     return angles
+
 
 def is_not_forward_angle(n, theta):
     """
@@ -245,25 +305,56 @@ def is_not_forward_angle(n, theta):
     # n = [lambda]
     # theta = [theta, lambda]
 
-    assert (n.real * n.imag >= 0).all(), ("For materials with gain, it's ambiguous which "
-                                          "beam is incoming vs outgoing. See "
-                                          "https://arxiv.org/abs/1603.02720 Appendix C.\n"
-                                          "n: " + str(n) + "   angle: " + str(theta))
+    assert (n.real * n.imag >= 0).all(), (
+        "For materials with gain, it's ambiguous which "
+        "beam is incoming vs outgoing. See "
+        "https://arxiv.org/abs/1603.02720 Appendix C.\n"
+        "n: " + str(n) + "   angle: " + str(theta)
+    )
+    np.set_printoptions(threshold=sys.maxsize)
+
     n = n.unsqueeze(1)
     ncostheta = cos(theta) * n
-    assert ncostheta.shape == theta.shape, 'ncostheta and theta shape doesnt match'
-    answer = (~(abs(ncostheta.imag) > 100 * EPSILON)) * (ncostheta.real > 0)
-    error_string = ("It's not clear which beam is incoming vs outgoing. Weird index maybe?\n"
-                    "n: " + str(n) + "   angle: " + str(theta))
 
-    #assert (ncostheta.imag > -100 * EPSILON)[answer].all(), error_string
-    #assert (ncostheta.real > -100 * EPSILON)[answer].all(), error_string
-    #assert ((n * cos(torch.conj(theta))).real > -100 * EPSILON)[answer].all(), error_string
-    #assert (ncostheta.imag < 100 * EPSILON)[~answer].all(), error_string
-    #assert (ncostheta.real < 100 * EPSILON)[~answer].all(), error_string
-    #assert ((n * cos(torch.conj(theta))).real < 100 * EPSILON)[~answer].all(), error_string
+    assert ncostheta.shape == theta.shape, "ncostheta and theta shape doesnt match"
+
+    answer = (~(abs(ncostheta.imag) > EPSILON)) * (ncostheta.real > -1 * EPSILON)
+    # torch.set_printoptions(profile="full")
+
+    error_string = (
+        "It's not clear which beam is incoming vs outgoing. Weird index maybe?\n"
+        "n: "
+        + str(n)
+        + "   angle: "
+        + str(theta)
+        + " ncostheta: "
+        + str(ncostheta)
+        + "\n"
+        "   answer: " + str(answer) + "\n"
+        " EPSILON = " + str(EPSILON) + "\n"
+    )
+
+    assert (ncostheta.imag > -1 * EPSILON)[answer].all(), (
+        error_string + "; first assert"
+    )
+    assert (ncostheta.real > -1 * EPSILON)[answer].all(), (
+        error_string + "; second assert"
+    )
+
+    assert ((n * cos(torch.conj(theta))).real > -1 * EPSILON)[answer].all(), (
+        error_string + "; third assert"
+    )
+    assert (ncostheta.imag < EPSILON)[~answer].all(), error_string + "; fourth assert"
+    if not (ncostheta.real < EPSILON)[~answer].all():
+        print(ncostheta[~answer].imag)
+    assert (ncostheta.real < EPSILON)[~answer].all(), error_string + "; fifth assert"
+    assert ((n * cos(torch.conj(theta))).real < EPSILON)[~answer].all(), (
+        error_string + "; sixth assert"
+    )
+
     answer = ~answer.clone().detach().long()
     return answer
+
 
 def is_forward_angle(n, theta):
     """
@@ -276,21 +367,25 @@ def is_forward_angle(n, theta):
     angle, then (pi-theta) is the backward angle and vice-versa.
     """
     n = n.clone().detach().to(torch.cfloat)  # torch.tensor(n, dtype=torch.cfloat)
-    assert torch.all(n.real * n.imag >= 0), ("For materials with gain, it's ambiguous which "
-                                  "beam is incoming vs outgoing. See "
-                                  "https://arxiv.org/abs/1603.02720 Appendix C.\n"
-                                  "n: " + str(n) + "   angle: " + str(theta))
+    assert torch.all(n.real * n.imag >= 0), (
+        "For materials with gain, it's ambiguous which "
+        "beam is incoming vs outgoing. See "
+        "https://arxiv.org/abs/1603.02720 Appendix C.\n"
+        "n: " + str(n) + "   angle: " + str(theta)
+    )
     # assert n.dtype is not complex,  ("For materials with gain, it's ambiguous which "
     #                               "beam is incoming vs outgoing. See "
     #                               "https://arxiv.org/abs/1603.02720 Appendix C.\n"
     #                               "n: " + str(n) + "   angle: " + str(theta))
 
     ncostheta = n * cos(theta)
-    ncostheta = ncostheta.clone().detach().to(torch.cfloat)  # torch.tensor(ncostheta, dtype=torch.cfloat)
+    ncostheta = (
+        ncostheta.clone().detach().to(torch.cfloat)
+    )  # torch.tensor(ncostheta, dtype=torch.cfloat)
     if torch.all(abs(ncostheta.imag) > 100 * EPSILON):
         # Either evanescent decay or lossy medium. Either way, the one that
         # decays is the forward-moving wave
-        answer = (ncostheta.imag > 0)
+        answer = ncostheta.imag > 0
     else:
         # Forward is the one with positive Poynting vector
         # Poynting vector is Re[n cos(theta)] for s-polarization or
@@ -300,9 +395,11 @@ def is_forward_angle(n, theta):
     # convert from numpy boolean to the normal Python boolean
     answer = bool(answer)
     # double-check the answer ... can't be too careful!
-    error_string = ("It's not clear which beam is incoming vs outgoing. Weird"
-                    " index maybe?\n"
-                    "n: " + str(n) + "   angle: " + str(theta))
+    error_string = (
+        "It's not clear which beam is incoming vs outgoing. Weird"
+        " index maybe?\n"
+        "n: " + str(n) + "   angle: " + str(theta)
+    )
     if answer is True:
         assert torch.all(ncostheta.imag > -100 * EPSILON), error_string
         assert torch.all(ncostheta.real > -100 * EPSILON), error_string
@@ -310,8 +407,11 @@ def is_forward_angle(n, theta):
     else:
         assert torch.all(ncostheta.imag < 100 * EPSILON), error_string
         assert torch.all(ncostheta.real < 100 * EPSILON), error_string
-        assert torch.all((n * cos(theta.conjugate())).real < 100 * EPSILON), error_string
+        assert torch.all(
+            (n * cos(theta.conjugate())).real < 100 * EPSILON
+        ), error_string
     return answer
+
 
 def interface_r_vec(polarization, n_i, n_f, th_i, th_f):
     """
@@ -321,16 +421,17 @@ def interface_r_vec(polarization, n_i, n_f, th_i, th_f):
     th_i, th_f are (complex) propegation angle for incident and final
     (in radians, where 0=normal). "th" stands for "theta".
     """
-    if polarization == 's':
-        ni_thi = torch.einsum('sij,skij->skji', n_i, torch.cos(th_i))
-        nf_thf = torch.einsum('sij,skij->skji', n_f, torch.cos(th_f))
+    if polarization == "s":
+        ni_thi = torch.einsum("sij,skij->skji", n_i, torch.cos(th_i))
+        nf_thf = torch.einsum("sij,skij->skji", n_f, torch.cos(th_f))
         return (ni_thi - nf_thf) / (ni_thi + nf_thf)
-    elif polarization == 'p':
-        nf_thi = torch.einsum('sij,skij->skji', n_f, torch.cos(th_i))
-        ni_thf = torch.einsum('sij,skij->skji', n_i, torch.cos(th_f))
+    elif polarization == "p":
+        nf_thi = torch.einsum("sij,skij->skji", n_f, torch.cos(th_i))
+        ni_thf = torch.einsum("sij,skij->skji", n_i, torch.cos(th_f))
         return (nf_thi - ni_thf) / (nf_thi + ni_thf)
     else:
         raise ValueError("Polarization must be 's' or 'p'")
+
 
 def interface_t_vec(polarization, n_i, n_f, th_i, th_f):
     """
@@ -340,23 +441,25 @@ def interface_t_vec(polarization, n_i, n_f, th_i, th_f):
     th_i, th_f are (complex) propegation angle for incident and final
     (in radians, where 0=normal). "th" stands for "theta".
     """
-    if polarization == 's':
-        ni_thi = torch.einsum('sij,skij->skji', n_i, torch.cos(th_i))
-        nf_thf = torch.einsum('sij,skij->skji', n_f, torch.cos(th_f))
+    if polarization == "s":
+        ni_thi = torch.einsum("sij,skij->skji", n_i, torch.cos(th_i))
+        nf_thf = torch.einsum("sij,skij->skji", n_f, torch.cos(th_f))
         return 2 * ni_thi / (ni_thi + nf_thf)
-    elif polarization == 'p':
-        nf_thi = torch.einsum('sij,skij->skji', n_f, torch.cos(th_i))
-        ni_thf = torch.einsum('sij,skij->skji', n_i, torch.cos(th_f))
-        ni_thi = torch.einsum('sij,skij->skji', n_i, torch.cos(th_i))
+    elif polarization == "p":
+        nf_thi = torch.einsum("sij,skij->skji", n_f, torch.cos(th_i))
+        ni_thf = torch.einsum("sij,skij->skji", n_i, torch.cos(th_f))
+        ni_thi = torch.einsum("sij,skij->skji", n_i, torch.cos(th_i))
         return 2 * ni_thi / (nf_thi + ni_thf)
     else:
         raise ValueError("Polarization must be 's' or 'p'")
+
 
 def R_from_r(r):
     """
     Calculate reflected power R, starting with reflection amplitude r.
     """
     return abs(r) ** 2
+
 
 def T_from_t_vec(pol, t, n_i, n_f, th_i, th_f):
     """
@@ -369,21 +472,22 @@ def T_from_t_vec(pol, t, n_i, n_f, th_i, th_f):
     See manual for discussion of formulas
     """
 
-    if pol == 's':
+    if pol == "s":
         ni_thi = torch.real(cos(th_i) * n_i.unsqueeze(1))
         nf_thf = torch.real(cos(th_f) * n_f.unsqueeze(1))
-        return (abs(t ** 2) * ((nf_thf) / (ni_thi)))
+        return abs(t**2) * ((nf_thf) / (ni_thi))
 
-    elif pol == 'p':
+    elif pol == "p":
         ni_thi = torch.real(conj(cos(th_i)) * n_i.unsqueeze(1))
         nf_thf = torch.real(conj(cos(th_f)) * n_f.unsqueeze(1))
-        return (abs(t ** 2) * ((nf_thf) / (ni_thi)))
+        return abs(t**2) * ((nf_thf) / (ni_thi))
 
     else:
         raise ValueError("Polarization must be 's' or 'p'")
 
-def converter(data:Union[np.ndarray, torch.Tensor], device:str) -> torch.Tensor:
-    '''
+
+def converter(data: Union[np.ndarray, torch.Tensor], device: str) -> torch.Tensor:
+    """
     Checks the datatype of data to torch.tensor and moves the tensor to the device.
 
     Parameters:
@@ -392,38 +496,74 @@ def converter(data:Union[np.ndarray, torch.Tensor], device:str) -> torch.Tensor:
         data that should be converted to torch.Tensor
     device : str
         either 'cpu' or 'cuda'
-    '''
+    """
     if type(data) is not torch.Tensor:
         if type(data) is np.ndarray:
             data = torch.from_numpy(data.copy())
         else:
-            raise ValueError('At least one of the inputs (i.e. N, Theta, ...) is not of type numpy.array or torch.Tensor!')
+            raise ValueError(
+                "At least one of the inputs (i.e. N, Theta, ...) is not of type numpy.array or torch.Tensor!"
+            )
     return data.type(torch.cfloat).to(device)
 
-def numpy_converter(data:torch.Tensor)->np.ndarray:
+
+def numpy_converter(data: torch.Tensor) -> np.ndarray:
     data = data.detach().cpu().numpy()
     return data
 
+
 def check_datatype(N, T, lambda_vacuum, Theta):
-    assert type(N) == type(T) == type(lambda_vacuum) == type(Theta), ValueError('All inputs (i.e. N, Theta, ...) must be of the same data type, i.e. numpy.array or torch.Tensor!')
+    assert type(N) == type(T) == type(lambda_vacuum) == type(Theta), ValueError(
+        "All inputs (i.e. N, Theta, ...) must be of the same data type, i.e. numpy.array or torch.Tensor!"
+    )
     return type(N)
 
+
 def check_inputs(N, T, lambda_vacuum, Theta):
+    N[:, -1, :].imag = 0
+    N[:, 0, :].imag = 0
     # check the dimensionalities of N:
-    assert N.ndim == 3, 'N is not of shape [S x L x W] (3d), as it is of dimension ' + str(N.ndim)
+    assert (
+        N.ndim == 3
+    ), "N is not of shape [S x L x W] (3d), as it is of dimension " + str(N.ndim)
     # check the dimensionalities of T:
-    assert T.ndim == 2, 'T is not of shape [S x L] (2d), as it is of dimension ' + str(T.ndim)
-    assert T.shape[0] == N.shape[0] and T.shape[1] == N.shape[1], 'First and second dimension of N and T must coincide,\nfound N.shape=' + str(N.shape) + ' and T.shape=' + str(T.shape) + ' instead!'
+    assert T.ndim == 2, "T is not of shape [S x L] (2d), as it is of dimension " + str(
+        T.ndim
+    )
+    assert T.shape[0] == N.shape[0] and T.shape[1] == N.shape[1], (
+        "First and second dimension of N and T must coincide,\nfound N.shape="
+        + str(N.shape)
+        + " and T.shape="
+        + str(T.shape)
+        + " instead!"
+    )
     # check the dimensionality of Theta:
-    assert Theta.ndim == 1, 'Theta is not of shape [A] (1d), as it is of dimension ' + str(Theta.ndim)
+    assert (
+        Theta.ndim == 1
+    ), "Theta is not of shape [A] (1d), as it is of dimension " + str(Theta.ndim)
     # check the dimensionality of lambda_vacuum:
-    assert lambda_vacuum.ndim == 1, 'lambda_vacuum is not of shape [W] (1d), as it is of dimension ' + str(lambda_vacuum.ndim)
-    assert N.shape[-1] == lambda_vacuum.shape[0], 'The last dimension of N must coincide with the dimension of lambda_vacuum (W),\nfound N.shape[-1]=' + str(N.shape[-1]) + ' and lambda_vacuum.shape[0]=' + str(lambda_vacuum.shape[0]) + ' instead!'
+    assert (
+        lambda_vacuum.ndim == 1
+    ), "lambda_vacuum is not of shape [W] (1d), as it is of dimension " + str(
+        lambda_vacuum.ndim
+    )
+    assert N.shape[-1] == lambda_vacuum.shape[0], (
+        "The last dimension of N must coincide with the dimension of lambda_vacuum (W),\nfound N.shape[-1]="
+        + str(N.shape[-1])
+        + " and lambda_vacuum.shape[0]="
+        + str(lambda_vacuum.shape[0])
+        + " instead!"
+    )
     # check non-imaginary property of refractive indicies for the first and last layer:
-    answer = torch.any((N[:, 0, :].imag > 0))
-    assert not answer, 'Non real-valued refractive indicies detected for first layer, i.g. N[:, 0, w].imag > 0 for some valid w!'
-    answer = torch.any((N[:, -1, :].imag > 0))
-    assert not answer, 'Non real-valued refractive indicies detected for last layer, i.g. N[:, -1, w].imag > 0 for some valid w!'
+    answer = torch.any((N[:, 0, :].imag > EPSILON))
+    assert (
+        not answer
+    ), "Non real-valued refractive indicies detected for first layer, i.g. N[:, 0, w].imag > 0 for some valid w!"
+    answer = torch.any((N[:, -1, :].imag > EPSILON))
+    assert (
+        not answer
+    ), "Non real-valued refractive indicies detected for last layer, i.g. N[:, -1, w].imag > 0 for some valid w!"
+
 
 def make_2x2_tensor(a, b, c, d, dtype=float):
     """
