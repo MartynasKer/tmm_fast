@@ -37,9 +37,11 @@ class Environment:
         SiO2_path = "materials/preprocessed/nSiO2.txt"
         ZnO_path = "materials/preprocessed/nZnO.txt"
         TiO2_path = "materials/preprocessed/nTiO2.txt"
+        Ti_path = "materials/preprocessed/nTi.txt"
         self.import_advanced_layers(SiO2_path, index=0)
         self.import_advanced_layers(ZnO_path, index=1)
         self.import_advanced_layers(TiO2_path, index=2)
+        self.import_advanced_layers(Ti_path, index=3)
 
     def import_advanced_layers(self, layer_file_path, index=None):
         """
@@ -91,7 +93,7 @@ class Environment:
         return tmm("s", self.M, self.W, self.theta, wl, device="cpu")["T"]
 
     def compute(self, wl):
-        return tmm("s", self.M, self.W, self.theta, wl, device="cpu")
+        return tmm("s", self.M, self.W, np.array([np.pi / 4]), wl, device="cpu")
 
     def step(self, actions):
         """
@@ -125,10 +127,11 @@ class Environment:
                 self.reset(idx)
 
                 continue
-            reward[idx] = self.get_reward(idx, R[idx], T[idx])
             done[idx] = False
             # print(self.current_layers[idx])
             if self.current_layers[idx] >= self.max_layers:
+                reward[idx] = self.get_reward(idx, R[idx], T[idx])
+
                 done[idx] = True
                 self.reset(idx)
 
@@ -139,16 +142,15 @@ class Environment:
         self.target_t[stack_id] = target_t
 
     def get_fitness(self, stack_id, r, t):
-        r_error = np.mean((r - self.target_r[stack_id]) ** 2)
-        t_error = np.mean((t - self.target_t[stack_id]) ** 2)
+        r_error = np.mean(np.abs(r - self.target_r[stack_id]))
+        t_error = np.mean(np.abs(t - self.target_t[stack_id]))
 
-        return 1 - (r_error + t_error)
+        return 1 - ((r_error + t_error) / 2)
 
     def get_reward(self, stack_id, r, t):
         fitness = self.get_fitness(stack_id, r, t)
-        reward = fitness - self.delta_fitness[stack_id]
-        self.delta_fitness[stack_id] = fitness
-        return reward - 0.05
+
+        return fitness
 
     def get_actions(self):
         # layer, thickness, reset
@@ -188,4 +190,4 @@ class Environment:
             [1, 5, 10, 15, 20, 25, 30, 35, 40, 45], dtype=np.complex128
         )
         self.thickness_options *= 10 ** (-9)
-        self.layer_options = np.empty((3, 1, 1200), dtype=np.complex128)
+        self.layer_options = np.empty((4, 1, 1200), dtype=np.complex128)
